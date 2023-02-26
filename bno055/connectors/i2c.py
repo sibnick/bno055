@@ -27,8 +27,8 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 
-from smbus import SMBus
-
+from fcntl import flock, LOCK_UN, LOCK_EX
+from smbus2 import SMBus
 from rclpy.node import Node
 
 from bno055 import registers
@@ -58,9 +58,14 @@ class I2C(Connector):
         
         :return:
         """
-        returned_id = self.bus.read_byte_data(self.address, registers.BNO055_CHIP_ID_ADDR)
-        if returned_id != registers.BNO055_ID:
-            raise TransmissionException('Could not get BNO055 chip ID via I2C')
+        
+        flock(self.bus.fd, LOCK_EX)
+        try:
+            returned_id = self.bus.read_byte_data(self.address, registers.BNO055_CHIP_ID_ADDR)
+            if returned_id != registers.BNO055_ID:
+                raise TransmissionException('Could not get BNO055 chip ID via I2C')
+        finally:
+            flock(self.bus.fd, LOCK_UN)
 
     def read(self, reg_addr, length):
         """Read data from sensor via I2C.
@@ -69,16 +74,20 @@ class I2C(Connector):
         :param length: The data length
         :return:
         """
-        buffer = bytearray()
-        bytes_left_to_read = length
-        while bytes_left_to_read > 0:
-            read_len = min(bytes_left_to_read, 32)
-            read_off = length - bytes_left_to_read
-            response = self.bus.read_i2c_block_data(
-                self.address, reg_addr + read_off, read_len)
-            buffer += bytearray(response)
-            bytes_left_to_read -= read_len
-        return buffer
+        flock(self.bus.fd, LOCK_EX)
+        try:
+            buffer = bytearray()
+            bytes_left_to_read = length
+            while bytes_left_to_read > 0:
+                read_len = min(bytes_left_to_read, 32)
+                read_off = length - bytes_left_to_read
+                response = self.bus.read_i2c_block_data(
+                    self.address, reg_addr + read_off, read_len)
+                buffer += bytearray(response)
+                bytes_left_to_read -= read_len
+            return buffer
+        finally:
+            flock(self.bus.fd, LOCK_UN)
 
     def write(self, reg_addr, length, data: bytes):
         """Write data to sensor via I2C.
@@ -89,11 +98,15 @@ class I2C(Connector):
         :return:
         """
         bytes_left_to_write = length
-        while bytes_left_to_write > 0:
-            write_len = min(bytes_left_to_write, 32)
-            write_off = length - bytes_left_to_write
-            datablock = list(data[write_off : write_off + write_len])
-            self.bus.write_i2c_block_data(
-                self.address, reg_addr + write_off, datablock)
-            bytes_left_to_write -= write_len
-        return True
+        flock(self.bus.fd, LOCK_EX)
+        try:
+            while bytes_left_to_write > 0:
+                write_len = min(bytes_left_to_write, 32)
+                write_off = length - bytes_left_to_write
+                datablock = list(data[write_off : write_off + write_len])
+                self.bus.write_i2c_block_data(
+                    self.address, reg_addr + write_off, datablock)
+                bytes_left_to_write -= write_len
+            return True
+        finally:
+            flock(self.bus.fd, LOCK_UN)
